@@ -31,5 +31,24 @@ Full design: `claude:nbweb-claude — Plugin Design v2 (two-market rewrite,
 
 ## Status
 
-Early scaffold. No functional code yet — see the design doc for the full
-plan and build order.
+**Proof of concept proven, 2026-07-09.** Market 1's foundational path works
+end to end, verified with real accounts and a real Anthropic call, not just
+designed:
+
+- `claude:` FM cascade (note override → notebook config → off), rendered as
+  a badge on the note toolbar — both cascade tiers confirmed live.
+- Clicking the badge opens a Q&A modal; asking a real question shells out to
+  a real `claude -p` call and returns a real, correctly-parsed response.
+
+**Known, load-bearing limitation, not a bug:** the current design shells out
+to the *host machine's* own authenticated `claude` CLI, so every click uses
+the same one Anthropic account regardless of who's asking. Correct for
+today's single-user reality (one person, one laptop, one already-authenticated
+CLI) — but this does not yet generalize to a second real user. Per-user auth
+is the next real fork, deliberately deferred rather than solved here.
+
+Everything else in the design doc (Market 2's agent-orchestration track, the
+MCP context-scoping wrapper, budget/cost tracking, multi-agent dashboard) is
+designed but not yet built. See the full design:
+`claude:nbweb-claude — Plugin Design v2 (two-market rewrite, 2026-07-09)`
+in the author's own `nb` notebook.
