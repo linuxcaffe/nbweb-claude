@@ -16,12 +16,30 @@
     // ── Rung 1: modal Q&A ────────────────────────────────────────────────────
     // Reuses dialog.js's .nb-dlg-* CSS classes for visual consistency, own
     // panel id (not #nb-action-panel -- that's NbDialog's own, kept separate).
-    // No MCP wrapper yet, no context scoping by level -- plain claude -p
-    // shell-out via /api/claude/ask, tech-gated server-side to match today's
-    // real single-user-auth reality (see app.py's own comment on that route).
+    // claude -p shell-out via /api/claude/ask, tech-gated server-side to
+    // match today's real single-user-auth reality (see app.py's own comment
+    // on that route). Real tool access via mcp_server.py (nb-web's own REST
+    // API, scoped-token authenticated) plus a live nav/view context snapshot
+    // (below) -- both inherited automatically, no new access-control code.
 
     function _panel() { return document.getElementById('nbweb-claude-modal'); }
     function _close()  { _panel()?.remove(); }
+
+    // Live nav/view snapshot, built fresh at ask-time (not open-time) so it
+    // reflects whatever the user was doing right up to hitting Ask. Purely
+    // informational -- the server folds this into --append-system-prompt,
+    // never into an access decision. Every accessor here is already public;
+    // no new kernel plumbing needed.
+    function _buildContext() {
+        return {
+            notebook:    NbNav.notebook,
+            folder:      NbNav.folder,
+            activeCmd:   NbNav.activeCmd,
+            sortMode:    NbMain.getSortMode(),
+            searchQuery: NbNav.searchQuery,
+            tagsQuery:   NbNav.tagsQuery,
+        };
+    }
 
     function _open() {
         _panel()?.remove(); // toggle-close if already open, same as NbDialog's own pattern
@@ -76,7 +94,7 @@
                 const r = await fetch('/api/claude/ask', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({selector, question}),
+                    body: JSON.stringify({selector, question, context: _buildContext()}),
                 });
                 const d = await r.json();
                 if (d.error) {
