@@ -21,6 +21,15 @@
     // on that route). Real tool access via mcp_server.py (nb-web's own REST
     // API, scoped-token authenticated) plus a live nav/view context snapshot
     // (below) -- both inherited automatically, no new access-control code.
+    //
+    // Rolling-chat layout, 2026-07-10: scrollable message history (newest at
+    // bottom, resizable), input pinned below it -- replaces the original
+    // single overwrite-in-place response div, which grew unbounded off the
+    // page and forced scrolling back to the top to ask a follow-up. Each
+    // modal instance also now threads a real --resume <session_id> between
+    // turns (server already generates one per call; previously never sent
+    // to the client) -- a "rolling chat" that didn't actually remember the
+    // previous turn would just look like a chat, not be one.
 
     function _panel() { return document.getElementById('nbweb-claude-modal'); }
     function _close()  { _panel()?.remove(); }
@@ -47,6 +56,7 @@
         const toolbar = document.getElementById('nb-preview-toolbar');
         if (!toolbar) return;
         const selector = NbMain.activeSelector();
+        let sessionId = null; // per-modal-instance -- fresh conversation each time the badge reopens it
 
         const panel = document.createElement('div');
         panel.id = 'nbweb-claude-modal';
@@ -67,10 +77,17 @@
         const body = document.createElement('div');
         body.className = 'nb-dlg-body';
 
+        const messages = document.createElement('div');
+        messages.id = 'nbweb-claude-messages';
+        messages.style.cssText = 'display:flex;flex-direction:column;gap:8px;max-height:260px;min-height:60px;overflow-y:auto;resize:vertical;padding:2px 2px 2px 0';
+
+        const inputRow = document.createElement('div');
+        inputRow.style.cssText = 'display:flex;flex-direction:column;gap:6px';
+
         const input = document.createElement('textarea');
         input.id = 'nbweb-claude-question';
         input.placeholder = 'Ask a question about this note…';
-        input.rows = 3;
+        input.rows = 2;
         input.style.cssText = 'width:100%;resize:vertical;font-family:inherit;font-size:13px;padding:6px;box-sizing:border-box;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px';
 
         const askBtn = document.createElement('button');
@@ -79,40 +96,72 @@
         askBtn.textContent = 'Ask';
         askBtn.style.cssText = 'align-self:flex-start';
 
-        const responseArea = document.createElement('div');
-        responseArea.id = 'nbweb-claude-response';
-        responseArea.style.cssText = 'white-space:pre-wrap;font-size:13px;line-height:1.5;padding-top:6px';
+        function _scrollToBottom() {
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function _addMessage(who, text) {
+            const row = document.createElement('div');
+            row.style.cssText = 'font-size:13px;line-height:1.5';
+            const label = document.createElement('div');
+            label.style.cssText = who === 'you'
+                ? 'font-weight:600;color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.03em'
+                : 'font-weight:600;color:var(--accent,#3a7bd5);font-size:11px;text-transform:uppercase;letter-spacing:.03em';
+            label.textContent = who === 'you' ? 'You' : 'Claude';
+            const body_ = document.createElement('div');
+            body_.style.cssText = 'white-space:pre-wrap';
+            body_.textContent = text;
+            row.append(label, body_);
+            messages.appendChild(row);
+            _scrollToBottom();
+            return body_;
+        }
+
+        function _addSpinner() {
+            const row = document.createElement('div');
+            row.style.cssText = 'font-size:13px;color:var(--text-muted)';
+            row.innerHTML = '<span class="nb-spin">⟳</span> Thinking…';
+            messages.appendChild(row);
+            _scrollToBottom();
+            return row;
+        }
 
         async function _ask() {
             const question = input.value.trim();
             if (!question) return;
+            input.value = '';
             askBtn.disabled = true;
-            askBtn.textContent = 'Thinking…';
-            responseArea.textContent = '';
-            responseArea.style.color = '';
+            _addMessage('you', question);
+            const spinnerRow = _addSpinner();
             try {
                 const r = await fetch('/api/claude/ask', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({selector, question, context: _buildContext()}),
+                    body: JSON.stringify({
+                        selector, question, context: _buildContext(),
+                        resume: sessionId || undefined,
+                    }),
                 });
                 const d = await r.json();
+                spinnerRow.remove();
                 if (d.error) {
-                    responseArea.style.color = 'var(--red)';
-                    responseArea.textContent = 'Error: ' + d.error;
+                    const errBody = _addMessage('claude', 'Error: ' + d.error);
+                    errBody.style.color = 'var(--red)';
                 } else {
-                    responseArea.textContent = d.answer;
+                    _addMessage('claude', d.answer);
+                    if (d.session_id) sessionId = d.session_id;
                     // Same refresh action the toolbar's reload button triggers --
                     // Claude called reload_note server-side after writing to this
                     // note, so pick that signal up and actually show the change.
                     if (d.reload && selector) NbMain.openNote(selector, false);
                 }
             } catch (e) {
-                responseArea.style.color = 'var(--red)';
-                responseArea.textContent = 'Error: ' + e;
+                spinnerRow.remove();
+                const errBody = _addMessage('claude', 'Error: ' + e);
+                errBody.style.color = 'var(--red)';
             } finally {
                 askBtn.disabled = false;
-                askBtn.textContent = 'Ask';
+                input.focus();
             }
         }
         askBtn.addEventListener('click', _ask);
@@ -120,7 +169,8 @@
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); _ask(); }
         });
 
-        body.append(input, askBtn, responseArea);
+        inputRow.append(input, askBtn);
+        body.append(messages, inputRow);
         panel.append(header, body);
         toolbar.insertAdjacentElement('afterend', panel);
         input.focus();
