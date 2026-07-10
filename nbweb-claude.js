@@ -39,7 +39,14 @@
     // informational -- the server folds this into --append-system-prompt,
     // never into an access decision. Every accessor here is already public;
     // no new kernel plumbing needed.
+    // Cap on how much of the focused note's own body rides along in every
+    // ask -- generous for a typical human-written note, bounded so one huge
+    // note can't blow up every question asked from it. A tool call
+    // (get_note) is still available for anything past this cut.
+    const _NOTE_TEXT_CAP = 4000;
+
     function _buildContext() {
+        const note = NbMain.activeNote?.();
         return {
             notebook:    NbNav.notebook,
             folder:      NbNav.folder,
@@ -47,6 +54,9 @@
             sortMode:    NbMain.getSortMode(),
             searchQuery: NbNav.searchQuery,
             tagsQuery:   NbNav.tagsQuery,
+            noteType:    note?.type || '',
+            noteHelp:    note?.meta?.help || '',
+            noteText:    (note?.body || '').slice(0, _NOTE_TEXT_CAP),
         };
     }
 
