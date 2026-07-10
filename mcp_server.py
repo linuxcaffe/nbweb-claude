@@ -62,5 +62,16 @@ def get_notebook_config(notebook: str) -> dict:
     return r.json()
 
 
+@mcp.tool()
+def append_to_note(selector: str, content: str) -> dict:
+    """Append content to the end of a note's body (e.g. a fenced ```claude
+    codeblock, a timedot entry, or prose). Write-gated the same as every
+    other note edit -- _can_write() runs before this can touch anything, so
+    this only succeeds where the asking user could already write by hand."""
+    r = _client.put('/api/note', json={'selector': selector, 'append': content})
+    r.raise_for_status()
+    return r.json()
+
+
 if __name__ == '__main__':
     mcp.run()
