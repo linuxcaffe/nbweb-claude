@@ -73,5 +73,16 @@ def append_to_note(selector: str, content: str) -> dict:
     return r.json()
 
 
+@mcp.tool()
+def reload_note() -> dict:
+    """Call this once, after append_to_note, so the note refreshes in the
+    user's browser. Same general-purpose refresh a human triggers via the
+    toolbar's reload button -- not a Claude-only mechanism, just a second
+    caller of it."""
+    r = _client.post('/api/claude/mark-reload')
+    r.raise_for_status()
+    return r.json()
+
+
 if __name__ == '__main__':
     mcp.run()

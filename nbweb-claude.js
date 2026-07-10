@@ -102,6 +102,10 @@
                     responseArea.textContent = 'Error: ' + d.error;
                 } else {
                     responseArea.textContent = d.answer;
+                    // Same refresh action the toolbar's reload button triggers --
+                    // Claude called reload_note server-side after writing to this
+                    // note, so pick that signal up and actually show the change.
+                    if (d.reload && selector) NbMain.openNote(selector, false);
                 }
             } catch (e) {
                 responseArea.style.color = 'var(--red)';
