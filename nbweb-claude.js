@@ -88,6 +88,17 @@
         </div>`;
     }
 
+    // Matches main.js's own _buildFmBlocks key convention exactly
+    // (`nb-fm:${bCls}:${bId}`, bId empty since this block sets no
+    // data-cmd/data-query/data-period) -- that's the localStorage key a
+    // full note reload's _buildFmBlocks checks to decide initial collapse
+    // state. The badge's fresh-start path bypasses _buildFmBlocks entirely
+    // (nothing in FM yet to trigger it), so it has to record this itself --
+    // otherwise the very next reload (e.g. the one reload_note triggers
+    // after Claude writes to the note) rebuilds the block collapsed by
+    // default, since nothing was ever recorded as "the user opened this."
+    const _ASK_FM_KEY = 'nb-fm:nb-claude-ask-block:';
+
     function _wireAskBlock(block) {
         if (block.dataset.askWired) return;
         block.dataset.askWired = '1';
@@ -99,7 +110,10 @@
         const selector = NbMain.activeSelector();
         let sessionId  = block.dataset.sessionId || null;
 
-        header.addEventListener('click', () => block.classList.toggle('nb-collapsed'));
+        header.addEventListener('click', () => {
+            const nowCollapsed = block.classList.toggle('nb-collapsed');
+            nowCollapsed ? localStorage.removeItem(_ASK_FM_KEY) : localStorage.setItem(_ASK_FM_KEY, '1');
+        });
 
         function _scrollToBottom() {
             messages.scrollTop = messages.scrollHeight;
@@ -179,11 +193,15 @@
     }
 
     // Badge click: reuse the existing rendered block if claude_ask: FM
-    // already put one in the FM strip, otherwise insert a fresh one (no FM
-    // entry exists yet -- that only gets written server-side after the
-    // first successful ask, see _update_note_ai_stats in app.py). Either
-    // way, force it open and focused -- tapping the badge is an explicit
-    // "I want to use this now," not just a peek.
+    // already put one in the FM strip, otherwise insert a fresh one -- the
+    // session id genuinely isn't known until a call completes (see
+    // api_claude_ask), though tokens:/status: now get a baseline write the
+    // moment the ask starts (_ensure_note_ai_stats_baseline), before this
+    // block's own FM key exists. Either way, force it open and focused --
+    // tapping the badge is an explicit "I want to use this now," not just
+    // a peek -- and record that preference in localStorage so a reload
+    // (e.g. the one reload_note triggers right after) doesn't rebuild it
+    // collapsed by default.
     function _openOrFocusAskBlock() {
         const wrap = document.getElementById('nb-fm-blocks');
         if (!wrap) return;
@@ -197,6 +215,7 @@
             wrap.hidden = false;
         }
         block.classList.remove('nb-collapsed');
+        localStorage.setItem(_ASK_FM_KEY, '1');
         _wireAskBlock(block);
         block.scrollIntoView({behavior: 'smooth', block: 'nearest'});
         block.querySelector('.nb-claude-ask-question')?.focus();
