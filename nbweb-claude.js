@@ -80,6 +80,12 @@
             </div>
             <div class="nb-claude-ask-body">
                 <div class="nb-claude-ask-messages"></div>
+                <div class="nb-claude-ask-permissions" title="Scope for any claude_code terminal opened from this conversation -- resolved fresh each time one launches, not just once">
+                    <span class="nb-claude-ask-perm-label">If a terminal opens, allow:</span>
+                    <label><input type="checkbox" data-perm="edit" checked> Edit</label>
+                    <label><input type="checkbox" data-perm="commit" checked> Commit</label>
+                    <label><input type="checkbox" data-perm="push"> Push</label>
+                </div>
                 <div class="nb-claude-ask-inputrow">
                     <textarea class="nb-claude-ask-question" placeholder="Ask a question about this note…" rows="2"></textarea>
                     <button class="nb-claude-ask-btn nb-tool-btn nb-btn-primary">Ask</button>
@@ -107,8 +113,31 @@
         const messages = block.querySelector('.nb-claude-ask-messages');
         const input    = block.querySelector('.nb-claude-ask-question');
         const askBtn   = block.querySelector('.nb-claude-ask-btn');
+        const permBoxes = [...block.querySelectorAll('.nb-claude-ask-permissions input[type=checkbox]')];
         const selector = NbMain.activeSelector();
         let sessionId  = block.dataset.sessionId || null;
+
+        // Initialize from the note's own current claude_permissions: FM
+        // value if set -- "remembered on session," not re-asked on every
+        // reload. Falls back to each checkbox's own HTML-default (edit +
+        // commit checked, push not) when the note has never had a scope
+        // set at all, rather than leaving every box unchecked.
+        const savedPerms = (NbMain.activeNote?.()?.meta?.claude_permissions || '').split(',').map(s => s.trim()).filter(Boolean);
+        if (savedPerms.length) {
+            for (const box of permBoxes) box.checked = savedPerms.includes(box.dataset.perm);
+        }
+
+        async function _savePermissions() {
+            const permissions = permBoxes.filter(b => b.checked).map(b => b.dataset.perm);
+            try {
+                await fetch('/api/claude/set-permissions', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({selector, permissions}),
+                });
+            } catch (e) { /* best-effort -- next launch just resolves whatever last landed */ }
+        }
+        for (const box of permBoxes) box.addEventListener('change', _savePermissions);
 
         header.addEventListener('click', () => {
             const nowCollapsed = block.classList.toggle('nb-collapsed');
