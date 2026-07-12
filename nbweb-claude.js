@@ -115,6 +115,10 @@
                 <label><input type="checkbox" data-perm="push"> Push</label>
                 <div class="nb-claude-ask-ratelimit-detail"></div>
             </div>
+            <div class="nb-claude-ask-goal-banner" hidden>
+                <span class="nb-claude-ask-goal-preview"></span>
+                <button class="nb-claude-ask-goal-run nb-tool-btn nb-btn-primary">🎯 Run Goal</button>
+            </div>
             <div class="nb-claude-ask-body">
                 <div class="nb-claude-ask-messages"></div>
                 <div class="nb-claude-ask-inputrow">
@@ -319,10 +323,14 @@
         // fresh reply bubble (liveRow = null) rather than appending into
         // the prior one, since a new burst of text after a tool result is
         // a new thought, not a continuation of the last sentence.
-        function _ask() {
-            const question = input.value.trim();
+        //
+        // _sendQuestion is the shared engine -- both the textarea's Ask
+        // button and the Run Goal banner (below) funnel through this one
+        // function, the only difference being what string they hand it
+        // ("your typed question" vs. an assembled "/goal <condition> or
+        // stop after N turns").
+        function _sendQuestion(question) {
             if (!question) return;
-            input.value = '';
             askBtn.disabled = true;
             _addMessage('you', question);
             const spinnerRow = _addSpinner();
@@ -403,9 +411,51 @@
                 errBody.style.color = 'var(--red)';
             });
         }
+
+        function _ask() {
+            const question = input.value.trim();
+            if (!question) return;
+            input.value = '';
+            _sendQuestion(question);
+        }
         askBtn.addEventListener('click', _ask);
         input.addEventListener('keydown', e => {
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); _ask(); }
+        });
+
+        // Run Goal -- reads whatever set_goal_fields most recently wrote
+        // to this note's FM and launches it for real over the same
+        // websocket _sendQuestion already drives. claude_goal_bound: is
+        // never stored pre-joined into the condition (see the MCP tool's
+        // own docstring) -- assembled into the literal "or stop after N
+        // turns" clause only here, at the moment of actually launching,
+        // matching exactly what a manual /goal call would look like.
+        const goalBanner  = block.querySelector('.nb-claude-ask-goal-banner');
+        const goalPreview = block.querySelector('.nb-claude-ask-goal-preview');
+        const goalRunBtn  = block.querySelector('.nb-claude-ask-goal-run');
+
+        function _refreshGoalBanner() {
+            const meta = NbMain.activeNote?.()?.meta || {};
+            const goal = (meta.claude_goal || '').trim();
+            if (!goal) { goalBanner.hidden = true; return; }
+            const bound = meta.claude_goal_bound;
+            const scope = meta.claude_goal_scope;
+            let preview = goal.length > 140 ? goal.slice(0, 137) + '...' : goal;
+            if (bound) preview += ` (≤${bound} turns)`;
+            if (scope) preview += ` [scope: ${scope}]`;
+            goalPreview.textContent = preview;
+            goalBanner.hidden = false;
+        }
+        _refreshGoalBanner();
+
+        goalRunBtn.addEventListener('click', () => {
+            const meta = NbMain.activeNote?.()?.meta || {};
+            const goal = (meta.claude_goal || '').trim();
+            if (!goal) return;
+            const bound = meta.claude_goal_bound;
+            let question = `/goal ${goal}`;
+            if (bound) question += ` or stop after ${bound} turns`;
+            _sendQuestion(question);
         });
     }
 

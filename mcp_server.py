@@ -123,6 +123,41 @@ def set_annotation(selector: str, content: str) -> dict:
 
 if TIER != 'haiku':
     @mcp.tool()
+    def set_goal_fields(selector: str, goal: str | None = None, bound: int | None = None,
+                         scope: str | None = None) -> dict:
+        """Propose or revise a /goal-mode setup for a todo -- writes
+        claude_goal: (the completion condition, no turn/time clause baked
+        in), claude_goal_bound: (a turn count -- the server appends "or
+        stop after N turns" only when the goal is actually launched, never
+        stored pre-joined), and claude_goal_scope: (comma-separated file
+        patterns the work is expected to stay within, e.g. "styles.css" or
+        "*.css"). Only fields you actually pass are touched -- leave an
+        argument at its default (None) to leave that field on the note
+        untouched; pass an empty string to explicitly clear one.
+
+        Only call this when the user has explicitly asked you to draft or
+        revise a goal -- never propose one unprompted, and this never
+        launches anything itself, a human reviews and launches separately.
+        A good condition names one measurable end state and how to prove
+        it (e.g. "grep confirms zero hardcoded colors remain in
+        styles.css"), not a restatement of the task. Whatever must
+        actually happen has to be in the condition text itself -- the
+        evaluator that checks a running goal never sees this note's body
+        text or your own chat reply, only the condition and the
+        conversation. Call reload_note afterward so the proposal is
+        visible immediately."""
+        payload = {'selector': selector}
+        if goal is not None:
+            payload['goal'] = goal
+        if bound is not None:
+            payload['bound'] = bound
+        if scope is not None:
+            payload['scope'] = scope
+        r = _client.post('/api/claude/set-goal', json=payload)
+        r.raise_for_status()
+        return r.json()
+
+    @mcp.tool()
     def append_to_note(selector: str, content: str) -> dict:
         """Append content to the end of a note's body (e.g. a fenced ```claude
         codeblock, a timedot entry, or prose). Write-gated the same as every
