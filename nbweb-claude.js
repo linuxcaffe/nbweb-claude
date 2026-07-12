@@ -104,6 +104,7 @@
                 <span class="nb-claude-ask-context"></span>
                 <span class="nb-claude-ask-account"></span>
                 <span class="nb-claude-ask-cost"></span>
+                <span class="nb-claude-ask-ratelimit" hidden title=""></span>
                 <button class="nb-claude-ask-perm-btn" title="Configure terminal permissions">⚙</button>
                 <button class="nb-claude-ask-end-btn" title="End session">⏹</button>
             </div>
@@ -112,6 +113,7 @@
                 <label><input type="checkbox" data-perm="edit" checked> Edit</label>
                 <label><input type="checkbox" data-perm="commit" checked> Commit</label>
                 <label><input type="checkbox" data-perm="push"> Push</label>
+                <div class="nb-claude-ask-ratelimit-detail"></div>
             </div>
             <div class="nb-claude-ask-body">
                 <div class="nb-claude-ask-messages"></div>
@@ -144,6 +146,8 @@
         const contextEl = block.querySelector('.nb-claude-ask-context');
         const accountEl = block.querySelector('.nb-claude-ask-account');
         const costEl    = block.querySelector('.nb-claude-ask-cost');
+        const rlEl      = block.querySelector('.nb-claude-ask-ratelimit');
+        const rlDetail  = block.querySelector('.nb-claude-ask-ratelimit-detail');
         const permBtn   = block.querySelector('.nb-claude-ask-perm-btn');
         const endBtn    = block.querySelector('.nb-claude-ask-end-btn');
         const permPopup = block.querySelector('.nb-claude-ask-perm-popup');
@@ -183,6 +187,33 @@
                 .catch(() => {});
         }
         _refreshHeader();
+
+        // Rate-limit info is free once the backend is watching the
+        // stream anyway (a rate_limit_event type flows past right after
+        // system/init on every real call) -- but it's account-wide,
+        // ephemeral state, not note FM, so unlike _refreshHeader there's
+        // nothing to show on initial wire; it only populates after the
+        // first real ask in this browser session. Quiet by default: the
+        // header badge only appears once something isn't plain
+        // "allowed" (matches djp's "too many options for one bar" call
+        // that already moved permissions into a popup) -- full detail
+        // for every known limit type always available in that same
+        // popup regardless of whether anything's actually constrained.
+        function _refreshRateLimits(rateLimits) {
+            if (!rateLimits || !rateLimits.length) return;
+            const constrained = rateLimits.filter(rl => rl.status && rl.status !== 'allowed');
+            rlEl.hidden = constrained.length === 0;
+            if (constrained.length) {
+                rlEl.textContent = '⚠ rate-limited';
+                rlEl.title = constrained.map(rl => `${rl.rateLimitType}: ${rl.status}`).join(', ');
+            }
+            rlDetail.innerHTML = rateLimits.map(rl => {
+                const resets = rl.resetsAt
+                    ? new Date(rl.resetsAt * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
+                    : '?';
+                return `<div>${_esc(rl.rateLimitType || 'limit')}: ${_esc(rl.status || '?')} · resets ${resets}</div>`;
+            }).join('');
+        }
 
         // Initialize from the note's own current claude_permissions: FM
         // value if set -- "remembered on session," not re-asked on every
@@ -307,6 +338,7 @@
                         block.dataset.sessionId = d.session_id;
                     }
                     _refreshHeader(d);
+                    _refreshRateLimits(d.rate_limits);
                     // Same refresh action the toolbar's reload button triggers --
                     // Claude called reload_note server-side after writing to this
                     // note, so pick that signal up and actually show the change.
