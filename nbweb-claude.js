@@ -69,23 +69,52 @@
         };
     }
 
+    // Status -> color, matching main.js's own _CLAUDE_STATUS_COLOR mapping
+    // for the list-row bar exactly (duplicated, not shared -- each file
+    // owns its own rendering, this is three lines). 'initiated' and
+    // anything a human types by hand stay grey deliberately -- richer
+    // colors need a real agent lifecycle behind them, not just a word in
+    // frontmatter (see .rules/agent.md's status vocabulary note).
+    const _STATUS_COLOR = {
+        working: 'var(--orange, #e07b39)',
+        waiting: 'var(--red, #ef4444)',
+        done:    'var(--green, #4ade80)',
+    };
+
     function _askBlockHtml(sessionId) {
         // No nb-collapsed hardcoded here -- same convention claude_code
         // follows: the FM-block eager-render loop (main.js) decides
         // initial collapse state from localStorage; the badge's
         // fresh-start path explicitly wants it open regardless.
+        //
+        // Header doubles as the session's control panel -- status dot,
+        // context%, account, cost-so-far, permissions, end-session -- all
+        // always visible whether the block is collapsed or not, since
+        // that's exactly when a glanceable answer to "what's going on
+        // here" matters most. 2026-07-11: moved the permission checkboxes
+        // out of the body into a popup here, per djp's "too many options
+        // for one bar" -- a button that reveals them beats them
+        // permanently occupying body space for a choice made once in a
+        // while.
         return `<div class="nb-claude-ask-block" data-session-id="${_esc(sessionId || '')}">
-            <div class="nb-claude-ask-header" title="Click to expand/collapse">
-                <span class="nb-claude-ask-toggle"></span>💬 Ask Claude
+            <div class="nb-claude-ask-header">
+                <span class="nb-claude-ask-toggle" title="Click to expand/collapse"></span>
+                <span class="nb-claude-ask-title" title="Click to expand/collapse">💬 Ask Claude</span>
+                <span class="nb-claude-ask-status-dot" data-status=""></span>
+                <span class="nb-claude-ask-context"></span>
+                <span class="nb-claude-ask-account"></span>
+                <span class="nb-claude-ask-cost"></span>
+                <button class="nb-claude-ask-perm-btn" title="Configure terminal permissions">⚙</button>
+                <button class="nb-claude-ask-end-btn" title="End session">⏹</button>
+            </div>
+            <div class="nb-claude-ask-perm-popup" hidden>
+                <div class="nb-claude-ask-perm-popup-label">If a terminal opens, allow:</div>
+                <label><input type="checkbox" data-perm="edit" checked> Edit</label>
+                <label><input type="checkbox" data-perm="commit" checked> Commit</label>
+                <label><input type="checkbox" data-perm="push"> Push</label>
             </div>
             <div class="nb-claude-ask-body">
                 <div class="nb-claude-ask-messages"></div>
-                <div class="nb-claude-ask-permissions" title="Scope for any claude_code terminal opened from this conversation -- resolved fresh each time one launches, not just once">
-                    <span class="nb-claude-ask-perm-label">If a terminal opens, allow:</span>
-                    <label><input type="checkbox" data-perm="edit" checked> Edit</label>
-                    <label><input type="checkbox" data-perm="commit" checked> Commit</label>
-                    <label><input type="checkbox" data-perm="push"> Push</label>
-                </div>
                 <div class="nb-claude-ask-inputrow">
                     <textarea class="nb-claude-ask-question" placeholder="Ask a question about this note…" rows="2"></textarea>
                     <button class="nb-claude-ask-btn nb-tool-btn nb-btn-primary">Ask</button>
@@ -109,13 +138,51 @@
         if (block.dataset.askWired) return;
         block.dataset.askWired = '1';
 
-        const header   = block.querySelector('.nb-claude-ask-header');
-        const messages = block.querySelector('.nb-claude-ask-messages');
-        const input    = block.querySelector('.nb-claude-ask-question');
-        const askBtn   = block.querySelector('.nb-claude-ask-btn');
-        const permBoxes = [...block.querySelectorAll('.nb-claude-ask-permissions input[type=checkbox]')];
-        const selector = NbMain.activeSelector();
-        let sessionId  = block.dataset.sessionId || null;
+        const toggle    = block.querySelector('.nb-claude-ask-toggle');
+        const title     = block.querySelector('.nb-claude-ask-title');
+        const statusDot = block.querySelector('.nb-claude-ask-status-dot');
+        const contextEl = block.querySelector('.nb-claude-ask-context');
+        const accountEl = block.querySelector('.nb-claude-ask-account');
+        const costEl    = block.querySelector('.nb-claude-ask-cost');
+        const permBtn   = block.querySelector('.nb-claude-ask-perm-btn');
+        const endBtn    = block.querySelector('.nb-claude-ask-end-btn');
+        const permPopup = block.querySelector('.nb-claude-ask-perm-popup');
+        const permBoxes = [...permPopup.querySelectorAll('input[type=checkbox]')];
+        const messages  = block.querySelector('.nb-claude-ask-messages');
+        const input     = block.querySelector('.nb-claude-ask-question');
+        const askBtn    = block.querySelector('.nb-claude-ask-btn');
+        const selector  = NbMain.activeSelector();
+        let sessionId   = block.dataset.sessionId || null;
+
+        // Header reflects the note's own current FM state -- called on
+        // wire (reading NbMain.activeNote()?.meta, the only source
+        // available at that point), and again after every successful ask
+        // using the fields the /api/claude/ask response now carries
+        // directly (claude_status/claude_context/claude_account), since
+        // those are read fresh from disk server-side right after this
+        // exact call's writes land -- activeNote()'s cached meta would
+        // otherwise show last-reload's values until a full note reload,
+        // which a plain conversational turn never triggers (d.reload only
+        // fires when Claude wrote to the note body). Cost is always
+        // queried fresh from the ledger (session-cost), never cached --
+        // same "ledger is truth" principle as everywhere else concerning
+        // tokens.
+        function _refreshHeader(fields) {
+            const src = fields || NbMain.activeNote?.()?.meta || {};
+            const status = src.claude_status || '';
+            statusDot.style.background = _STATUS_COLOR[status] || 'var(--text-dim, #888)';
+            statusDot.title = status ? `status: ${status}` : '';
+            const ctx = src.claude_context;
+            contextEl.textContent = ctx != null && ctx !== '' ? `${ctx}%` : '';
+            const acct = src.claude_account;
+            accountEl.textContent = acct || '';
+            accountEl.title = acct ? `accounting to ${acct}` : 'no claude_account: set -- see .rules/mcp-tools.md cascade';
+            fetch(`/api/claude/session-cost?selector=${encodeURIComponent(selector)}`)
+                .then(r => r.json())
+                .then(d => { costEl.textContent = d.cost ? `$${d.cost.toFixed(2)}` : ''; })
+                .catch(() => {});
+        }
+        _refreshHeader();
 
         // Initialize from the note's own current claude_permissions: FM
         // value if set -- "remembered on session," not re-asked on every
@@ -139,10 +206,48 @@
         }
         for (const box of permBoxes) box.addEventListener('change', _savePermissions);
 
-        header.addEventListener('click', () => {
-            const nowCollapsed = block.classList.toggle('nb-collapsed');
-            nowCollapsed ? localStorage.removeItem(_ASK_FM_KEY) : localStorage.setItem(_ASK_FM_KEY, '1');
+        // Popup toggle, dismiss-on-outside-click -- same pattern as the
+        // rest of nb-web's own dropdown menus.
+        permBtn.addEventListener('click', e => {
+            e.stopPropagation();
+            const willShow = permPopup.hidden;
+            permPopup.hidden = !willShow;
+            if (willShow) {
+                setTimeout(() => document.addEventListener('click', function dismiss(ev) {
+                    if (!permPopup.contains(ev.target) && ev.target !== permBtn) {
+                        permPopup.hidden = true;
+                        document.removeEventListener('click', dismiss, true);
+                    }
+                }, true), 0);
+            }
         });
+        permPopup.addEventListener('click', e => e.stopPropagation());
+
+        endBtn.addEventListener('click', async e => {
+            e.stopPropagation();
+            endBtn.disabled = true;
+            try {
+                await fetch('/api/claude/end-session', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({selector}),
+                });
+                if (selector) NbMain.openNote(selector, false);
+            } catch (e) { /* best-effort */ }
+            finally { endBtn.disabled = false; }
+        });
+
+        // Only the toggle/title trigger collapse -- gear/end buttons and
+        // the popup already stopPropagation their own clicks, but being
+        // explicit about what the header's own click target list is
+        // avoids ever accidentally wiring a future header addition to
+        // toggle collapse by default.
+        for (const el of [toggle, title]) {
+            el.addEventListener('click', () => {
+                const nowCollapsed = block.classList.toggle('nb-collapsed');
+                nowCollapsed ? localStorage.removeItem(_ASK_FM_KEY) : localStorage.setItem(_ASK_FM_KEY, '1');
+            });
+        }
 
         function _scrollToBottom() {
             messages.scrollTop = messages.scrollHeight;
@@ -201,6 +306,7 @@
                         sessionId = d.session_id;
                         block.dataset.sessionId = d.session_id;
                     }
+                    _refreshHeader(d);
                     // Same refresh action the toolbar's reload button triggers --
                     // Claude called reload_note server-side after writing to this
                     // note, so pick that signal up and actually show the change.
