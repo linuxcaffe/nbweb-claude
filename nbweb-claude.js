@@ -310,48 +310,98 @@
             return row;
         }
 
-        async function _ask() {
+        // Live over /ws/claude-ask instead of a single blocking POST --
+        // the backend (_stream_claude_ask, app.py) pushes assistant text,
+        // tool calls, and rate-limit updates as they happen, ending with
+        // one 'done' event shaped exactly like the old POST response, so
+        // _refreshHeader/_refreshRateLimits/reload logic is unchanged,
+        // just triggered from a different transport. A tool call starts a
+        // fresh reply bubble (liveRow = null) rather than appending into
+        // the prior one, since a new burst of text after a tool result is
+        // a new thought, not a continuation of the last sentence.
+        function _ask() {
             const question = input.value.trim();
             if (!question) return;
             input.value = '';
             askBtn.disabled = true;
             _addMessage('you', question);
             const spinnerRow = _addSpinner();
+            let spinnerGone = false;
+            function _clearSpinner() {
+                if (!spinnerGone) { spinnerRow.remove(); spinnerGone = true; }
+            }
+            let liveRow = null;
+
+            let ws;
             try {
-                const r = await fetch('/api/claude/ask', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        selector, question, context: _buildContext(),
-                        resume: sessionId || undefined,
-                    }),
-                });
-                const d = await r.json();
-                spinnerRow.remove();
-                if (d.error) {
-                    const errBody = _addMessage('claude', 'Error: ' + d.error);
+                const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+                ws = new WebSocket(`${proto}://${location.host}/ws/claude-ask`);
+            } catch (e) {
+                _clearSpinner();
+                const errBody = _addMessage('claude', 'Error: ' + e);
+                errBody.style.color = 'var(--red)';
+                askBtn.disabled = false;
+                return;
+            }
+
+            ws.addEventListener('open', () => {
+                ws.send(JSON.stringify({
+                    selector, question, context: _buildContext(),
+                    resume: sessionId || undefined,
+                }));
+            });
+
+            ws.addEventListener('message', ev => {
+                let evt;
+                try { evt = JSON.parse(ev.data); } catch { return; }
+                _clearSpinner();
+                if (evt.kind === 'text') {
+                    if (!liveRow) liveRow = _addMessage('claude', '');
+                    liveRow.textContent = evt.text;
+                    _scrollToBottom();
+                } else if (evt.kind === 'tool_use') {
+                    liveRow = null;
+                    const row = document.createElement('div');
+                    row.style.cssText = 'font-size:12px;color:var(--text-dim);font-style:italic';
+                    row.textContent = `🔧 ${evt.name}${evt.summary ? ': ' + evt.summary : ''}`;
+                    messages.appendChild(row);
+                    _scrollToBottom();
+                } else if (evt.kind === 'rate_limit') {
+                    _refreshRateLimits(evt.rate_limits);
+                } else if (evt.kind === 'error') {
+                    const errBody = _addMessage('claude', 'Error: ' + evt.message);
                     errBody.style.color = 'var(--red)';
-                } else {
-                    _addMessage('claude', d.answer);
+                } else if (evt.kind === 'done') {
+                    const d = evt.response;
+                    // Always set from d.answer, even if liveRow already
+                    // shows the same text from the last 'text' event --
+                    // the "stopped early" (circuit breaker/timeout/scope)
+                    // case appends a message that was never streamed as
+                    // its own text event, only assembled after the loop
+                    // ended server-side.
+                    if (!liveRow) liveRow = _addMessage('claude', '');
+                    liveRow.textContent = d.answer;
                     if (d.session_id) {
                         sessionId = d.session_id;
                         block.dataset.sessionId = d.session_id;
                     }
                     _refreshHeader(d);
                     _refreshRateLimits(d.rate_limits);
-                    // Same refresh action the toolbar's reload button triggers --
-                    // Claude called reload_note server-side after writing to this
-                    // note, so pick that signal up and actually show the change.
                     if (d.reload && selector) NbMain.openNote(selector, false);
                 }
-            } catch (e) {
-                spinnerRow.remove();
-                const errBody = _addMessage('claude', 'Error: ' + e);
-                errBody.style.color = 'var(--red)';
-            } finally {
+            });
+
+            ws.addEventListener('close', () => {
+                _clearSpinner();
                 askBtn.disabled = false;
                 input.focus();
-            }
+            });
+
+            ws.addEventListener('error', () => {
+                _clearSpinner();
+                const errBody = _addMessage('claude', 'Error: connection failed');
+                errBody.style.color = 'var(--red)';
+            });
         }
         askBtn.addEventListener('click', _ask);
         input.addEventListener('keydown', e => {
