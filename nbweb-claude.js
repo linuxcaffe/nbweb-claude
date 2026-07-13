@@ -284,8 +284,20 @@
             });
         }
 
+        // messages itself no longer scrolls (see styles.css comment on
+        // .nb-claude-ask-messages/.nb-claude-ask-inputrow, 2026-07-12 --
+        // a nested scrollport was a mobile touch-capture trap and, worse,
+        // could push the input row off screen with no way back to it).
+        // The page's own scroller (#nb-preview-content) is what actually
+        // needs nudging now, and only far enough to keep the sticky input
+        // row's bottom edge in view -- not a hard scrollIntoView jump,
+        // which would fight the user if they've scrolled up to reread an
+        // earlier answer mid-stream.
         function _scrollToBottom() {
-            messages.scrollTop = messages.scrollHeight;
+            const scroller = document.getElementById('nb-preview-content');
+            if (!scroller) return;
+            const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 200;
+            if (nearBottom) scroller.scrollTop = scroller.scrollHeight;
         }
 
         function _addMessage(who, text) {
@@ -339,6 +351,16 @@
                 if (!spinnerGone) { spinnerRow.remove(); spinnerGone = true; }
             }
             let liveRow = null;
+            // Set once a real terminal message (done or explicit error) has
+            // been shown -- a WebSocket can fire 'error' right alongside a
+            // clean server-initiated close (confirmed real: a scope-guardrail
+            // stop sends its 'done' event with the "Stopped early" answer,
+            // then the underlying connection teardown still triggers the
+            // browser's own 'error' event on some networks/mobile). Without
+            // this, a perfectly good, specific stop message gets a
+            // redundant, unexplained "Error: connection failed" appended
+            // right after it.
+            let terminalMessageShown = false;
 
             let ws;
             try {
@@ -377,9 +399,11 @@
                 } else if (evt.kind === 'rate_limit') {
                     _refreshRateLimits(evt.rate_limits);
                 } else if (evt.kind === 'error') {
+                    terminalMessageShown = true;
                     const errBody = _addMessage('claude', 'Error: ' + evt.message);
                     errBody.style.color = 'var(--red)';
                 } else if (evt.kind === 'done') {
+                    terminalMessageShown = true;
                     const d = evt.response;
                     // Always set from d.answer, even if liveRow already
                     // shows the same text from the last 'text' event --
@@ -407,6 +431,7 @@
 
             ws.addEventListener('error', () => {
                 _clearSpinner();
+                if (terminalMessageShown) return;
                 const errBody = _addMessage('claude', 'Error: connection failed');
                 errBody.style.color = 'var(--red)';
             });
