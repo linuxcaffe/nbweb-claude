@@ -105,15 +105,8 @@
                 <span class="nb-claude-ask-account"></span>
                 <span class="nb-claude-ask-cost"></span>
                 <span class="nb-claude-ask-ratelimit" hidden title=""></span>
-                <button class="nb-claude-ask-perm-btn" title="Configure terminal permissions">⚙</button>
+                <button class="nb-claude-ask-perm-btn" title="Session settings — account, scope, permissions, spend">⚙</button>
                 <button class="nb-claude-ask-end-btn" title="End session">⏹</button>
-            </div>
-            <div class="nb-claude-ask-perm-popup" hidden>
-                <div class="nb-claude-ask-perm-popup-label">If a terminal opens, allow:</div>
-                <label><input type="checkbox" data-perm="edit" checked> Edit</label>
-                <label><input type="checkbox" data-perm="commit" checked> Commit</label>
-                <label><input type="checkbox" data-perm="push"> Push</label>
-                <div class="nb-claude-ask-ratelimit-detail"></div>
             </div>
             <div class="nb-claude-ask-goal-banner" hidden>
                 <span class="nb-claude-ask-goal-preview"></span>
@@ -127,6 +120,195 @@
                 </div>
             </div>
         </div>`;
+    }
+
+    // ── Pre-flight config modal ──────────────────────────────────────────
+    // One consolidated surface for everything that used to be scattered
+    // across a permissions-only popup and hand-typed frontmatter: account
+    // (claude_account), file scope (claude_goal_scope), tool permissions
+    // (claude_permissions), and a spend/limits readout. A single shared
+    // singleton (like nb-web's own #nb-mkd-modal) rather than one per
+    // ask-block, since only one note's ask-block is ever visible at a
+    // time -- _configCtx is reassigned on every open() to whichever
+    // block's gear button was actually clicked. Shape (bordered
+    // floating-label field chips, a <datalist>-backed autocomplete field,
+    // a footer with a primary Enter-bound action and an Escape-bound
+    // Cancel, each showing its keybind) modeled on djp's favorite:
+    // taskwarrior-web's compact Add-task dialog.
+    let _configModalEl = null;
+    let _configCtx = null; // { selector, refreshHeader, refreshGoalBanner }
+
+    function _closeConfigModal() {
+        if (_configModalEl) _configModalEl.hidden = true;
+        _configCtx = null;
+    }
+
+    async function _refreshScopeDatalist(selector, accountValue) {
+        const list = _configModalEl?.querySelector('#nb-claude-config-scope-suggest');
+        if (!list) return;
+        try {
+            const url = `/api/claude/repo-files?selector=${encodeURIComponent(selector)}&account=${encodeURIComponent(accountValue || '')}`;
+            const d = await fetch(url).then(r => r.json());
+            list.innerHTML = (d.files || []).map(f => `<option value="${_esc(f)}">`).join('');
+        } catch (e) { /* datalist just stays empty/stale -- non-critical */ }
+    }
+
+    async function _saveConfigModal() {
+        if (!_configCtx) return;
+        const { selector, refreshHeader, refreshGoalBanner } = _configCtx;
+        const modal = _configModalEl;
+        const account = modal.querySelector('.nb-claude-config-account').value.trim();
+        const scope   = modal.querySelector('.nb-claude-config-scope').value.trim();
+        const permissions = [...modal.querySelectorAll('.nb-claude-config-perms input[type=checkbox]')]
+            .filter(b => b.checked).map(b => b.dataset.perm);
+
+        const saveBtn = modal.querySelector('.nb-claude-config-save');
+        saveBtn.disabled = true;
+        try {
+            await Promise.all([
+                fetch('/api/claude/set-account', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({selector, account}),
+                }),
+                fetch('/api/claude/set-goal', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({selector, scope}),
+                }),
+                fetch('/api/claude/set-permissions', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({selector, permissions}),
+                }),
+            ]);
+        } catch (e) { /* best-effort -- next launch just resolves whatever last landed */ }
+        saveBtn.disabled = false;
+        _closeConfigModal();
+        refreshHeader();
+        refreshGoalBanner();
+    }
+
+    function _ensureConfigModal() {
+        if (_configModalEl) return _configModalEl;
+        const div = document.createElement('div');
+        div.className = 'nb-claude-config-modal';
+        div.hidden = true;
+        div.innerHTML = `
+            <div class="nb-claude-config-box">
+                <button class="nb-claude-config-close" title="Close (Esc)">×</button>
+                <h3>Claude session settings</h3>
+
+                <label class="nb-claude-config-field">
+                    <span class="nb-claude-config-field-label">Account (claude_account)</span>
+                    <input type="text" class="nb-claude-config-account" list="nb-claude-config-account-suggest" autocomplete="off">
+                </label>
+                <datalist id="nb-claude-config-account-suggest"></datalist>
+                <div class="nb-claude-config-hint nb-claude-config-account-hint" hidden></div>
+
+                <label class="nb-claude-config-field">
+                    <span class="nb-claude-config-field-label">File scope (claude_goal_scope)</span>
+                    <input type="text" class="nb-claude-config-scope" list="nb-claude-config-scope-suggest" autocomplete="off" placeholder="e.g. main.js, app.py">
+                </label>
+                <datalist id="nb-claude-config-scope-suggest"></datalist>
+                <div class="nb-claude-config-hint">Comma-separated; only checked during goal-mode Write/Edit calls.</div>
+
+                <div class="nb-claude-config-field">
+                    <span class="nb-claude-config-field-label">If a terminal opens, allow</span>
+                    <div class="nb-claude-config-perms">
+                        <label><input type="checkbox" data-perm="edit" checked> Edit</label>
+                        <label><input type="checkbox" data-perm="commit" checked> Commit</label>
+                        <label><input type="checkbox" data-perm="push"> Push</label>
+                    </div>
+                </div>
+
+                <div class="nb-claude-config-spend">
+                    <div class="nb-claude-config-spend-summary"></div>
+                    <div class="nb-claude-config-ratelimit-detail"></div>
+                </div>
+
+                <div class="nb-claude-config-footer">
+                    <button class="nb-tool-btn nb-claude-config-cancel">Cancel <kbd>Esc</kbd></button>
+                    <button class="nb-tool-btn nb-btn-primary nb-claude-config-save">Save <kbd>⏎</kbd></button>
+                </div>
+            </div>`;
+        document.body.appendChild(div);
+        _configModalEl = div;
+
+        div.querySelector('.nb-claude-config-close').addEventListener('click', _closeConfigModal);
+        div.querySelector('.nb-claude-config-cancel').addEventListener('click', _closeConfigModal);
+        div.querySelector('.nb-claude-config-save').addEventListener('click', _saveConfigModal);
+        // Backdrop click only -- e.target === div means the click landed
+        // outside .nb-claude-config-box (any click inside it targets a
+        // descendant, never the backdrop div itself), so no
+        // stopPropagation gymnastics needed on the box.
+        div.addEventListener('click', e => { if (e.target === div) _closeConfigModal(); });
+        // Bare Enter/Escape, not Ctrl/Cmd+Enter -- every field here is a
+        // single-line text input or checkbox, never a textarea, so Enter
+        // has no competing "insert a newline" meaning to protect against
+        // (unlike the ask question box below). Matches the tw-web Add
+        // dialog's own footer convention exactly.
+        document.addEventListener('keydown', e => {
+            if (!_configModalEl || _configModalEl.hidden) return;
+            if (e.key === 'Escape') { e.preventDefault(); _closeConfigModal(); }
+            else if (e.key === 'Enter') { e.preventDefault(); _saveConfigModal(); }
+        });
+        div.querySelector('.nb-claude-config-account').addEventListener('change', e => {
+            if (_configCtx) _refreshScopeDatalist(_configCtx.selector, e.target.value.trim());
+        });
+
+        return div;
+    }
+
+    function _openConfigModal(ctx) {
+        const modal = _ensureConfigModal();
+        _configCtx = ctx;
+        const meta = NbMain.activeNote?.()?.meta || {};
+
+        const accountInput = modal.querySelector('.nb-claude-config-account');
+        const scopeInput   = modal.querySelector('.nb-claude-config-scope');
+        const permBoxes    = [...modal.querySelectorAll('.nb-claude-config-perms input[type=checkbox]')];
+        const accountHint  = modal.querySelector('.nb-claude-config-account-hint');
+        const spendSummary = modal.querySelector('.nb-claude-config-spend-summary');
+
+        accountInput.value = meta.claude_account || '';
+        scopeInput.value   = meta.claude_goal_scope || '';
+
+        // Same "remembered on session" fallback as the old popup: HTML
+        // defaults (edit+commit checked, push not) when nothing's been
+        // set yet, rather than leaving every box unchecked.
+        const savedPerms = (meta.claude_permissions || '').split(',').map(s => s.trim()).filter(Boolean);
+        for (const box of permBoxes) {
+            box.checked = savedPerms.length ? savedPerms.includes(box.dataset.perm) : box.dataset.perm !== 'push';
+        }
+
+        // Retroactively changing claude_account on a note with an
+        // existing session breaks that session's --resume from the new
+        // cwd -- confirmed real earlier this session (claude:87). Not
+        // blocked, just surfaced, since it's a legitimate informed choice.
+        if (meta.claude_ask) {
+            accountHint.hidden = false;
+            accountHint.textContent = '⚠ this note has an active session — changing this may break --resume from a different cwd.';
+        } else {
+            accountHint.hidden = true;
+        }
+
+        const accountList = modal.querySelector('#nb-claude-config-account-suggest');
+        fetch('/api/system/repos').then(r => r.json()).then(d => {
+            accountList.innerHTML = (d.repos || []).map(r => `<option value="${_esc(r.name)}">`).join('');
+        }).catch(() => {});
+
+        _refreshScopeDatalist(ctx.selector, accountInput.value);
+
+        fetch(`/api/claude/session-cost?selector=${encodeURIComponent(ctx.selector)}`)
+            .then(r => r.json())
+            .then(d => {
+                const cost = d.cost ? `$${d.cost.toFixed(2)}` : '$0.00';
+                const maxTurns = d.max_turns != null ? d.max_turns : '?';
+                const maxTokens = d.max_new_tokens != null ? d.max_new_tokens.toLocaleString() : '?';
+                spendSummary.innerHTML = `<strong>${cost}</strong> spent so far &middot; auto-stops after ${maxTurns} turns or ${maxTokens} new tokens (no dollar cap yet)`;
+            })
+            .catch(() => { spendSummary.textContent = ''; });
+
+        modal.hidden = false;
+        accountInput.focus();
     }
 
     // Matches main.js's own _buildFmBlocks key convention exactly
@@ -151,11 +333,8 @@
         const accountEl = block.querySelector('.nb-claude-ask-account');
         const costEl    = block.querySelector('.nb-claude-ask-cost');
         const rlEl      = block.querySelector('.nb-claude-ask-ratelimit');
-        const rlDetail  = block.querySelector('.nb-claude-ask-ratelimit-detail');
         const permBtn   = block.querySelector('.nb-claude-ask-perm-btn');
         const endBtn    = block.querySelector('.nb-claude-ask-end-btn');
-        const permPopup = block.querySelector('.nb-claude-ask-perm-popup');
-        const permBoxes = [...permPopup.querySelectorAll('input[type=checkbox]')];
         const messages  = block.querySelector('.nb-claude-ask-messages');
         const input     = block.querySelector('.nb-claude-ask-question');
         const askBtn    = block.querySelector('.nb-claude-ask-btn');
@@ -198,11 +377,14 @@
         // ephemeral state, not note FM, so unlike _refreshHeader there's
         // nothing to show on initial wire; it only populates after the
         // first real ask in this browser session. Quiet by default: the
-        // header badge only appears once something isn't plain
-        // "allowed" (matches djp's "too many options for one bar" call
-        // that already moved permissions into a popup) -- full detail
-        // for every known limit type always available in that same
-        // popup regardless of whether anything's actually constrained.
+        // header badge only appears once something isn't plain "allowed"
+        // (matches djp's "too many options for one bar" call that already
+        // moved permissions out of the header) -- full detail for every
+        // known limit type lives in the config modal's spend section now
+        // (2026-07-12, folded in alongside account/scope/permissions),
+        // written only if that modal has actually been built at least
+        // once (_configModalEl is null until the gear button's first
+        // click) -- the small header badge above is unaffected either way.
         function _refreshRateLimits(rateLimits) {
             if (!rateLimits || !rateLimits.length) return;
             const constrained = rateLimits.filter(rl => rl.status && rl.status !== 'allowed');
@@ -211,52 +393,24 @@
                 rlEl.textContent = '⚠ rate-limited';
                 rlEl.title = constrained.map(rl => `${rl.rateLimitType}: ${rl.status}`).join(', ');
             }
-            rlDetail.innerHTML = rateLimits.map(rl => {
-                const resets = rl.resetsAt
-                    ? new Date(rl.resetsAt * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
-                    : '?';
-                return `<div>${_esc(rl.rateLimitType || 'limit')}: ${_esc(rl.status || '?')} · resets ${resets}</div>`;
-            }).join('');
+            const rlDetail = _configModalEl?.querySelector('.nb-claude-config-ratelimit-detail');
+            if (rlDetail) {
+                rlDetail.innerHTML = rateLimits.map(rl => {
+                    const resets = rl.resetsAt
+                        ? new Date(rl.resetsAt * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
+                        : '?';
+                    return `<div>${_esc(rl.rateLimitType || 'limit')}: ${_esc(rl.status || '?')} · resets ${resets}</div>`;
+                }).join('');
+            }
         }
 
-        // Initialize from the note's own current claude_permissions: FM
-        // value if set -- "remembered on session," not re-asked on every
-        // reload. Falls back to each checkbox's own HTML-default (edit +
-        // commit checked, push not) when the note has never had a scope
-        // set at all, rather than leaving every box unchecked.
-        const savedPerms = (NbMain.activeNote?.()?.meta?.claude_permissions || '').split(',').map(s => s.trim()).filter(Boolean);
-        if (savedPerms.length) {
-            for (const box of permBoxes) box.checked = savedPerms.includes(box.dataset.perm);
-        }
-
-        async function _savePermissions() {
-            const permissions = permBoxes.filter(b => b.checked).map(b => b.dataset.perm);
-            try {
-                await fetch('/api/claude/set-permissions', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({selector, permissions}),
-                });
-            } catch (e) { /* best-effort -- next launch just resolves whatever last landed */ }
-        }
-        for (const box of permBoxes) box.addEventListener('change', _savePermissions);
-
-        // Popup toggle, dismiss-on-outside-click -- same pattern as the
-        // rest of nb-web's own dropdown menus.
+        // Gear button opens the pre-flight config modal (account, file
+        // scope, tool permissions, spend/limits all in one place) instead
+        // of the old inline permissions-only popup.
         permBtn.addEventListener('click', e => {
             e.stopPropagation();
-            const willShow = permPopup.hidden;
-            permPopup.hidden = !willShow;
-            if (willShow) {
-                setTimeout(() => document.addEventListener('click', function dismiss(ev) {
-                    if (!permPopup.contains(ev.target) && ev.target !== permBtn) {
-                        permPopup.hidden = true;
-                        document.removeEventListener('click', dismiss, true);
-                    }
-                }, true), 0);
-            }
+            _openConfigModal({ selector, refreshHeader: _refreshHeader, refreshGoalBanner: _refreshGoalBanner });
         });
-        permPopup.addEventListener('click', e => e.stopPropagation());
 
         endBtn.addEventListener('click', async e => {
             e.stopPropagation();
