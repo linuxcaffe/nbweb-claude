@@ -76,7 +76,7 @@
     // colors need a real agent lifecycle behind them, not just a word in
     // frontmatter (see .rules/agent.md's status vocabulary note).
     const _STATUS_COLOR = {
-        working: 'var(--orange, #e07b39)',
+        working: 'var(--yellow)',
         waiting: 'var(--red, #ef4444)',
         done:    'var(--green, #4ade80)',
     };
